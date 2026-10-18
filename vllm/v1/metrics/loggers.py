@@ -626,6 +626,21 @@ class PrometheusStatLogger(AggregateStatLoggerBase):
             gauge_kv_cache_usage, per_engine_labelvalues
         )
 
+        gauge_kv_cache_free_cached = self._gauge_cls(
+            name="vllm:kv_cache_free_cached_perc",
+            documentation=(
+                "Fraction of the KV cache held by free blocks that still hold "
+                "a valid prefix cache entry. vllm:kv_cache_usage_perc counts "
+                "these blocks as unused, but reusing them discards the cached "
+                "prefix. 1 means 100 percent of the KV cache."
+            ),
+            multiprocess_mode="mostrecent",
+            labelnames=labelnames,
+        )
+        self.gauge_kv_cache_free_cached = create_metric_per_engine(
+            gauge_kv_cache_free_cached, per_engine_labelvalues
+        )
+
         if envs.VLLM_COMPUTE_NANS_IN_LOGITS:
             counter_corrupted_requests = self._counter_cls(
                 name="vllm:corrupted_requests",
@@ -1163,6 +1178,9 @@ class PrometheusStatLogger(AggregateStatLoggerBase):
                     scheduler_stats.num_kv_fetch_reqs_by_stage.get(stage, 0)
                 )
             self.gauge_kv_cache_usage[engine_idx].set(scheduler_stats.kv_cache_usage)
+            self.gauge_kv_cache_free_cached[engine_idx].set(
+                scheduler_stats.kv_cache_free_cached_usage
+            )
 
             self.counter_prefix_cache_queries[engine_idx].inc(
                 scheduler_stats.prefix_cache_stats.queries

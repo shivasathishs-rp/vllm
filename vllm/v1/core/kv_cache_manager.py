@@ -233,6 +233,16 @@ class KVCacheManager:
         """
         return self.block_pool.get_usage()
 
+    @property
+    def free_cached_usage(self) -> float:
+        """Get the fraction of the KV cache held by free cached blocks.
+
+        Returns:
+            The free cached block fraction (between 0.0 and 1.0).
+
+        """
+        return self.block_pool.get_free_cached_usage()
+
     def make_prefix_cache_stats(self) -> PrefixCacheStats | None:
         """Get (and reset) the prefix cache stats.
 

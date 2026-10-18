@@ -187,6 +187,11 @@ class BlockPool:
         self.null_block = self.free_block_queue.popleft()
         self.null_block.is_null = True
 
+        # Free blocks (ref_cnt == 0) that still hold a valid block hash, i.e.
+        # eviction candidates whose cached prefix is still reusable. Stays 0
+        # when caching is disabled.
+        self.num_free_cached_blocks = 0
+
         self.enable_kv_cache_events = enable_kv_cache_events
         self.kv_event_queue: list[KVCacheEvent] = []
 
@@ -594,6 +599,8 @@ class BlockPool:
         block_hashes: list[BlockHashWithGroupId] = []
         if block.block_hash is not None:
             block_hashes.append(block.block_hash)
+            if self.enable_caching and block.ref_cnt == 0:
+                self.num_free_cached_blocks -= 1
         block_hashes.extend(self.cached_block_hashes_by_block.pop(block.block_id, ()))
         if not block_hashes:
             return []
@@ -639,6 +646,8 @@ class BlockPool:
 
         if block.block_hash is None:
             block.set_block_hash(block_hash_with_group_id, num_tokens=num_tokens)
+            if self.enable_caching and block.ref_cnt == 0:
+                self.num_free_cached_blocks += 1
         else:
             self.cached_block_hashes_by_block.setdefault(block.block_id, set()).add(
                 block_hash_with_group_id
@@ -724,6 +733,8 @@ class BlockPool:
             self._reuse_watchers[block.block_id] = on_reuse
             if block.ref_cnt == 0:
                 released.append(block)
+                if self.enable_caching and block.block_hash is not None:
+                    self.num_free_cached_blocks += 1
         self.free_block_queue.append_n(released)
 
     def _maybe_evict_cached_block(self, block: KVCacheBlock) -> bool:
@@ -765,6 +776,8 @@ class BlockPool:
             # candidate), so remove it.
             if block.ref_cnt == 0:
                 self.free_block_queue.remove(block)
+                if self.enable_caching and block.block_hash is not None:
+                    self.num_free_cached_blocks -= 1
             block.ref_cnt += 1
             if self.metrics_collector:
                 self.metrics_collector.on_block_accessed(block)
@@ -805,6 +818,8 @@ class BlockPool:
         self.free_block_queue.prepend_n(blocks_to_evict_first)
         # Blocks to reuse last are appended to the end of the free queue.
         self.free_block_queue.append_n(blocks_to_evict_last)
+        # Non-empty only when caching is enabled, and every such block is cached.
+        self.num_free_cached_blocks += len(blocks_to_evict_last)
         for pool, blocks in other_pools.items():
             pool.free_blocks(blocks)
 
@@ -858,6 +873,8 @@ class BlockPool:
         # Remove all hashes from all blocks.
         for block in self.blocks:
             block.reset_hash()
+        # Every block but the null block is free here, so nothing is cached.
+        self.num_free_cached_blocks = 0
 
         if self.metrics_collector:
             self.metrics_collector.reset()
@@ -890,6 +907,23 @@ class BlockPool:
         if not total_gpu_blocks:
             return 0
         return 1.0 - (self.get_num_free_blocks() / total_gpu_blocks)
+
+    def get_free_cached_usage(self) -> float:
+        """Get the fraction of the KV cache held by free cached blocks.
+
+        These blocks are free, so `get_usage` counts them as unused, but they
+        still hold a prefix cache entry that a subsequent allocation would
+        evict.
+
+        Returns:
+            The free cached block fraction (between 0.0 and 1.0).
+
+        """
+        # Subtract 1 to account for null block.
+        total_gpu_blocks = self.num_gpu_blocks - 1
+        if not total_gpu_blocks:
+            return 0
+        return self.num_free_cached_blocks / total_gpu_blocks
 
     def take_events(self) -> list[KVCacheEvent]:
         """Atomically takes all events and clears the queue.

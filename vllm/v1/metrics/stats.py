@@ -236,6 +236,9 @@ class SchedulerStats:
     current_wave: int = 0
 
     kv_cache_usage: float = 0.0
+    # Fraction of the KV cache held by free blocks that still hold a valid
+    # prefix cache entry. Counted as unused by `kv_cache_usage`.
+    kv_cache_free_cached_usage: float = 0.0
     iteration_details: SchedulerIterationDetails | None = None
 
     prefix_cache_stats: PrefixCacheStats = field(default_factory=PrefixCacheStats)

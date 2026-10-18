@@ -3132,6 +3132,61 @@ def test_cache_blocks(hash_fn):
     assert blocks[0].block_hash is not None
 
 
+def test_num_free_cached_blocks():
+    """Free blocks holding a reusable prefix are counted separately."""
+    block_size = 4
+    pool = BlockPool(num_gpu_blocks=8, enable_caching=True, hash_block_size=block_size)
+    req = make_request("0", list(range(12)), block_size, sha256)
+
+    def walk_free_queue() -> int:
+        return sum(
+            1
+            for block in pool.free_block_queue.get_all_free_blocks()
+            if block.block_hash is not None
+        )
+
+    cached = pool.get_new_blocks(2)
+    uncached = pool.get_new_blocks(1)
+    pool.cache_full_blocks(
+        request=req,
+        blocks=cached,
+        num_cached_blocks=0,
+        num_full_blocks=2,
+        block_size=block_size,
+        kv_cache_group_id=0,
+    )
+    # Cached, but allocated rather than free.
+    assert pool.num_free_cached_blocks == 0
+
+    # A freed block with no hash can never serve a prefix cache hit.
+    pool.free_blocks(uncached)
+    assert pool.num_free_cached_blocks == 0 == walk_free_queue()
+
+    pool.free_blocks(cached)
+    # Both freed blocks still hold a reusable prefix, which `get_usage` does
+    # not distinguish from an empty pool.
+    assert pool.get_usage() == 0.0
+    assert pool.num_free_cached_blocks == 2 == walk_free_queue()
+    assert pool.get_free_cached_usage() == 2 / (pool.num_gpu_blocks - 1)
+
+    # A prefix cache hit takes one block back out of the free queue.
+    hit = pool.get_cached_block(req.block_hashes[0], kv_cache_group_ids=[0])
+    assert hit is not None
+    pool.touch(hit)
+    assert pool.num_free_cached_blocks == 1 == walk_free_queue()
+
+    # Allocating the rest of the pool evicts the remaining cached block.
+    pool.get_new_blocks(pool.get_num_free_blocks())
+    assert pool.num_free_cached_blocks == 0 == walk_free_queue()
+
+    # The touched block was never reused, so it is cached again once freed,
+    # and resetting the prefix cache drops it.
+    pool.free_blocks(pool.blocks[1:])
+    assert pool.num_free_cached_blocks == 1 == walk_free_queue()
+    assert pool.reset_prefix_cache()
+    assert pool.num_free_cached_blocks == 0 == walk_free_queue()
+
+
 def test_cache_blocks_multi_group():
     """This tests that blocks are cached correctly for different kv cache groups."""
     block_size = 4

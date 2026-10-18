@@ -84,6 +84,7 @@ def get_named_metrics_from_prometheus() -> list[tuple[str, float]]:
     # Map from prometheus metric names to ORCA named metrics.
     prometheus_to_orca_metrics = {
         "vllm:kv_cache_usage_perc": "kv_cache_usage_perc",
+        "vllm:kv_cache_free_cached_perc": "kv_cache_free_cached_perc",
         "vllm:num_requests_waiting": "num_requests_waiting",
     }
     metrics = get_metrics_snapshot()
